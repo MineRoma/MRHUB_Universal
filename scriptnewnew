@@ -1,0 +1,1225 @@
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+
+-- Переменные для системы флая
+local FLYING = false
+local QEfly = true
+local flyKeyDown, flyKeyUp
+
+-- Переменные для Fly Fling
+local flyFlingEnabled = false
+local flyFlingConnection = nil
+local lastFlingTime = {}
+
+-- Переменные для WalkSpeed и JumpPower
+local currentWalkSpeed = 16
+local originalWalkSpeed = 16
+local currentJumpPower = 50
+local originalJumpPower = 50
+
+-- Переменные для WalkFling
+local walkFlingEnabled = false
+local walkFlingConnection = nil
+
+-- Переменные
+local IgnoredPlayers = {}
+local Noclip = false
+local FlySpeed = 1
+local originalFlingPosition = nil
+local isFlinging = false
+local selectedPlayerForTP = nil
+local isMinimized = false
+
+-- НОВАЯ ПЕРЕМЕННАЯ: Соединение для контроля WalkSpeed
+local walkSpeedEnforcerConnection = nil
+
+-- Функция для получения корневой части персонажа
+local function getRoot(char)
+    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+    return root
+end
+
+-- Функция для получения Humanoid
+local function getHumanoid(char)
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    return humanoid
+end
+
+-- ИСПРАВЛЕННАЯ ФУНКЦИЯ: Постоянный контроль WalkSpeed
+local function updateWalkSpeed()
+    if player.Character then
+        local humanoid = getHumanoid(player.Character)
+        if humanoid then
+            -- 1. Устанавливаем желаемое значение
+            humanoid.WalkSpeed = currentWalkSpeed
+
+            -- 2. Отключаем старый контроллер скорости, если он был
+            if walkSpeedEnforcerConnection then
+                walkSpeedEnforcerConnection:Disconnect()
+                walkSpeedEnforcerConnection = nil
+            end
+
+            -- 3. НОВЫЙ НАДЕЖНЫЙ КОНТРОЛЛЕР: Принудительное поддержание WalkSpeed
+            -- Используем GetPropertyChangedSignal, чтобы слушать изменения
+            walkSpeedEnforcerConnection = humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+                -- Если WalkSpeed изменился и не равен нашему значению, устанавливаем его обратно
+                if humanoid.WalkSpeed ~= currentWalkSpeed and currentWalkSpeed ~= 0 then
+                    humanoid.WalkSpeed = currentWalkSpeed
+                    -- print("⚠️ WalkSpeed был изменен сервером/скриптом. Принудительно установлен в: " .. currentWalkSpeed)
+                end
+            end)
+        end
+    end
+end
+
+-- Функция для обновления JumpPower
+local function updateJumpPower()
+    if player.Character then
+        local humanoid = getHumanoid(player.Character)
+        if humanoid then
+            humanoid.JumpPower = currentJumpPower
+        end
+    end
+end
+
+-- Создаем улучшенный GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "XenoScriptGUI"
+ScreenGui.Parent = game.CoreGui
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+MainFrame.Size = UDim2.new(0, 350, 0, 750)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+-- Скругление для главного фрейма
+local MainFrameCorner = Instance.new("UICorner")
+MainFrameCorner.CornerRadius = UDim.new(0, 12)
+MainFrameCorner.Parent = MainFrame
+
+-- Заголовок
+local Title = Instance.new("TextLabel")
+Title.Name = "Title"
+Title.Parent = MainFrame
+Title.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.Font = Enum.Font.GothamBold
+Title.Text = "XENO SCRIPT"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Center
+
+-- Скругление для заголовка
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 12)
+TitleCorner.Parent = Title
+
+-- Кнопка сворачивания
+local MinimizeButton = Instance.new("TextButton")
+MinimizeButton.Name = "MinimizeButton"
+MinimizeButton.Parent = Title
+MinimizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+MinimizeButton.BorderSizePixel = 0
+MinimizeButton.Position = UDim2.new(0.9, 0, 0.15, 0)
+MinimizeButton.Size = UDim2.new(0, 25, 0, 25)
+MinimizeButton.Font = Enum.Font.GothamBold
+MinimizeButton.Text = "-"
+MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeButton.TextSize = 16
+
+-- Скругление для кнопки сворачивания
+local MinimizeCorner = Instance.new("UICorner")
+MinimizeCorner.CornerRadius = UDim.new(0, 6)
+MinimizeCorner.Parent = MinimizeButton
+
+-- Поле ввода
+local InputFrame = Instance.new("Frame")
+InputFrame.Name = "InputFrame"
+InputFrame.Parent = MainFrame
+InputFrame.BackgroundTransparency = 1
+InputFrame.Position = UDim2.new(0, 15, 0, 50)
+InputFrame.Size = UDim2.new(1, -30, 0, 35)
+
+local InputBox = Instance.new("TextBox")
+InputBox.Name = "InputBox"
+InputBox.Parent = InputFrame
+InputBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+InputBox.BorderSizePixel = 0
+InputBox.Position = UDim2.new(0, 0, 0, 0)
+InputBox.Size = UDim2.new(0.7, 0, 1, 0)
+InputBox.Font = Enum.Font.Gotham
+InputBox.PlaceholderText = "Введите ник..."
+InputBox.Text = ""
+InputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+InputBox.TextSize = 14
+InputBox.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Скругление для поля ввода
+local InputBoxCorner = Instance.new("UICorner")
+InputBoxCorner.CornerRadius = UDim.new(0, 8)
+InputBoxCorner.Parent = InputBox
+
+local AddButton = Instance.new("TextButton")
+AddButton.Name = "AddButton"
+AddButton.Parent = InputFrame
+AddButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+AddButton.BorderSizePixel = 0
+AddButton.Position = UDim2.new(0.72, 5, 0, 0)
+AddButton.Size = UDim2.new(0.28, 0, 1, 0)
+AddButton.Font = Enum.Font.GothamBold
+AddButton.Text = "ДОБАВИТЬ"
+AddButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+AddButton.TextSize = 12
+
+-- Скругление для кнопки добавления
+local AddButtonCorner = Instance.new("UICorner")
+AddButtonCorner.CornerRadius = UDim.new(0, 8)
+AddButtonCorner.Parent = AddButton
+
+-- Список игнора
+local IgnoreLabel = Instance.new("TextLabel")
+IgnoreLabel.Name = "IgnoreLabel"
+IgnoreLabel.Parent = MainFrame
+IgnoreLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+IgnoreLabel.Position = UDim2.new(0, 15, 0, 95)
+IgnoreLabel.Size = UDim2.new(1, -30, 0, 25)
+IgnoreLabel.Font = Enum.Font.Gotham
+IgnoreLabel.Text = "Игнор-лист:"
+IgnoreLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+IgnoreLabel.TextSize = 14
+IgnoreLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Скругление для заголовка игнор-листа
+local IgnoreLabelCorner = Instance.new("UICorner")
+IgnoreLabelCorner.CornerRadius = UDim.new(0, 6)
+IgnoreLabelCorner.Parent = IgnoreLabel
+
+local IgnoreList = Instance.new("ScrollingFrame")
+IgnoreList.Name = "IgnoreList"
+IgnoreList.Parent = MainFrame
+IgnoreList.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+IgnoreList.BorderSizePixel = 0
+IgnoreList.Position = UDim2.new(0, 15, 0, 120)
+IgnoreList.Size = UDim2.new(1, -30, 0, 80)
+IgnoreList.CanvasSize = UDim2.new(0, 0, 0, 0)
+IgnoreList.ScrollBarThickness = 5
+
+-- Скругление для списка игнора
+local IgnoreListCorner = Instance.new("UICorner")
+IgnoreListCorner.CornerRadius = UDim.new(0, 6)
+IgnoreListCorner.Parent = IgnoreList
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = IgnoreList
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Функция для создания кнопок
+local function CreateButton(text, color, yPosition)
+    local button = Instance.new("TextButton")
+    button.Parent = MainFrame
+    button.BackgroundColor3 = color
+    button.BorderSizePixel = 0
+    button.Position = UDim2.new(0, 15, 0, yPosition)
+    button.Size = UDim2.new(1, -30, 0, 35)
+    button.Font = Enum.Font.GothamBold
+    button.Text = text
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.TextSize = 14
+    
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 8)
+    buttonCorner.Parent = button
+    
+    return button
+end
+
+-- Функция для создания контролов
+local function CreateControlFrame(labelText, yPosition)
+    local frame = Instance.new("Frame")
+    frame.Name = "ControlFrame"
+    frame.Parent = MainFrame
+    frame.BackgroundTransparency = 1
+    frame.Position = UDim2.new(0, 15, 0, yPosition)
+    frame.Size = UDim2.new(1, -30, 0, 30)
+
+    local label = Instance.new("TextLabel")
+    label.Name = "Label"
+    label.Parent = frame
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.new(0.5, 0, 1, 0)
+    label.Font = Enum.Font.Gotham
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 14
+    label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local downButton = Instance.new("TextButton")
+    downButton.Name = "DownButton"
+    downButton.Parent = frame
+    downButton.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+    downButton.BorderSizePixel = 0
+    downButton.Position = UDim2.new(0.5, 5, 0.2, 0)
+    downButton.Size = UDim2.new(0.14, 0, 0.6, 0)
+    downButton.Font = Enum.Font.GothamBold
+    downButton.Text = "-"
+    downButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    downButton.TextSize = 16
+
+    local downCorner = Instance.new("UICorner")
+    downCorner.CornerRadius = UDim.new(0, 4)
+    downCorner.Parent = downButton
+
+    local upButton = Instance.new("TextButton")
+    upButton.Name = "UpButton"
+    upButton.Parent = frame
+    upButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+    upButton.BorderSizePixel = 0
+    upButton.Position = UDim2.new(0.65, 5, 0.2, 0)
+    upButton.Size = UDim2.new(0.14, 0, 0.6, 0)
+    upButton.Font = Enum.Font.GothamBold
+    upButton.Text = "+"
+    upButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    upButton.TextSize = 16
+
+    local upCorner = Instance.new("UICorner")
+    upCorner.CornerRadius = UDim.new(0, 4)
+    upCorner.Parent = upButton
+    
+    return frame
+end
+
+-- Создаем кнопки
+local buttonY = 210
+local buttonHeight = 35
+local buttonSpacing = 5
+
+local FlingButton = CreateButton("ФЛИНГ ВСЕХ", Color3.fromRGB(255, 50, 50), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local FlyButton = CreateButton("ПОЛЕТ: ВЫКЛ", Color3.fromRGB(0, 150, 50), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local NoclipButton = CreateButton("НОУКЛИП: ВЫКЛ", Color3.fromRGB(150, 150, 0), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local FlyFlingButton = CreateButton("FLY FLING: ВЫКЛ", Color3.fromRGB(150, 0, 150), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local WalkFlingButton = CreateButton("WALK FLING: ВЫКЛ", Color3.fromRGB(200, 100, 0), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local TPForwardButton = CreateButton("TP FORWARD", Color3.fromRGB(0, 100, 200), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local TPToPlayerButton = CreateButton("TP TO PLAYER", Color3.fromRGB(0, 150, 150), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local ResetButton = CreateButton("RESET", Color3.fromRGB(200, 0, 0), buttonY)
+buttonY = buttonY + buttonHeight + buttonSpacing
+
+local ServerHopButton = CreateButton("SERVER HOP", Color3.fromRGB(0, 150, 100), buttonY)
+
+-- Список игроков для TP
+local PlayerListFrame = Instance.new("ScrollingFrame")
+PlayerListFrame.Name = "PlayerListFrame"
+PlayerListFrame.Parent = MainFrame
+PlayerListFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+PlayerListFrame.BorderSizePixel = 0
+PlayerListFrame.Position = UDim2.new(0, 15, 0, 525)
+PlayerListFrame.Size = UDim2.new(1, -30, 0, 80)
+PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+PlayerListFrame.ScrollBarThickness = 5
+PlayerListFrame.Visible = false
+
+-- Скругление для списка игроков
+local PlayerListCorner = Instance.new("UICorner")
+PlayerListCorner.CornerRadius = UDim.new(0, 6)
+PlayerListCorner.Parent = PlayerListFrame
+
+local PlayerListLayout = Instance.new("UIListLayout")
+PlayerListLayout.Parent = PlayerListFrame
+PlayerListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Контроль скорости полета
+local SpeedFrame = CreateControlFrame("Fly Speed: 1", 615)
+local WalkSpeedFrame = CreateControlFrame("WalkSpeed: " .. currentWalkSpeed, 645)
+local JumpPowerFrame = CreateControlFrame("JumpPower: " .. currentJumpPower, 675)
+
+-- Функция телепорта вперед
+local function TPForward()
+    if not player.Character then return end
+    
+    local rootPart = getRoot(player.Character)
+    if not rootPart then return end
+    
+    local camera = workspace.CurrentCamera
+    local lookVector = camera.CFrame.LookVector
+   
+    -- Используем только горизонтальное направление взгляда
+    local horizontalLook = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+    
+    -- Телепортируем на 40 studs вперед по горизонтали
+    local newPosition = rootPart.Position + (horizontalLook * 40)
+    
+    -- Сохраняем текущую высоту, чтобы не телепортироваться вниз
+    newPosition = Vector3.new(newPosition.X, rootPart.Position.Y, newPosition.Z)
+    
+    -- Устанавливаем новую позицию, сохраняя ориентацию
+    rootPart.CFrame = CFrame.new(newPosition) * (rootPart.CFrame - rootPart.CFrame.Position)
+end
+
+-- Функция телепорта к игроку
+local function TPToPlayer()
+   
+    if not selectedPlayerForTP then
+        print("❌ Игрок не выбран!")
+        return
+    end
+    
+    if not player.Character then return end
+    
+    local targetPlayer = selectedPlayerForTP
+    if not targetPlayer or not targetPlayer.Character then
+        print("❌ У выбранного игрока нет персонажа!")
+        return
+    end
+    
+    local targetRoot = getRoot(targetPlayer.Character)
+   
+    local myRoot = getRoot(player.Character)
+    
+    if not targetRoot or not myRoot then return end
+    
+    -- Телепортируемся к игроку на небольшом расстоянии
+    local offset = CFrame.new(0, 0, 5)
+    myRoot.CFrame = targetRoot.CFrame * offset
+    
+    print("✅ Телепортирован к игроку: " .. targetPlayer.Name)
+end
+
+-- Функция сброса персонажа
+local function ResetCharacter()
+    if player.Character then
+        player.Character:BreakJoints()
+        print("✅ Персонаж сброшен!")
+    end
+end
+
+-- Функция смены сервера
+local function ServerHop()
+    local placeId = game.PlaceId
+    local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100"))
+    
+    for _, server in ipairs(servers.data) do
+        if server.playing < server.maxPlayers and server.id ~= game.JobId then
+            TeleportService:TeleportToPlaceInstance(placeId, server.id)
+            return
+        end
+    end
+    
+    print("❌ Не удалось найти подходящий сервер!")
+end
+
+-- Функции для полета
+local function sFLY()
+    local plr = player
+    local char = plr.Character
+    if not char then return end
+    
+    local humanoid = getHumanoid(char)
+    if not humanoid then return end
+
+    if flyKeyDown or flyKeyUp then
+        flyKeyDown:Disconnect()
+        flyKeyUp:Disconnect()
+    end
+
+    local T = getRoot(char)
+    if not T then return end
+   
+    local CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+    local lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+    local SPEED = 0
+
+    local function FLY()
+        FLYING = true
+        local BG = Instance.new('BodyGyro')
+        local BV = Instance.new('BodyVelocity')
+      
+        BG.P = 9e4
+        BG.Parent = T
+        BV.Parent = T
+        BG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        BG.CFrame = T.CFrame
+        BV.Velocity = Vector3.new(0, 0, 0)
+        BV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        
+        spawn(function()
+            repeat wait()
+ 
+                if not FLYING or not char or not T then break end
+                
+                local camera = workspace.CurrentCamera
+                if humanoid then
+                    humanoid.PlatformStand = true
+                end
+
+                if CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0 then
+                    SPEED = 50 * FlySpeed
+                elseif not (CONTROL.L + CONTROL.R ~= 0 or CONTROL.F + CONTROL.B ~= 0 or CONTROL.Q + CONTROL.E ~= 0) and SPEED ~= 0 then
+                    SPEED = 0
+                end
+                
+                if (CONTROL.L + CONTROL.R) ~= 0 or (CONTROL.F + CONTROL.B) ~= 0 or (CONTROL.Q + CONTROL.E) ~= 0 then
+                    BV.Velocity = ((camera.CFrame.LookVector * (CONTROL.F + CONTROL.B)) + ((camera.CFrame * CFrame.new(CONTROL.L + CONTROL.R, (CONTROL.F + CONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - camera.CFrame.p)) * SPEED
+                    lCONTROL = {F = CONTROL.F, B = CONTROL.B, L = CONTROL.L, R = CONTROL.R}
+                elseif (CONTROL.L + CONTROL.R) == 0 and (CONTROL.F + CONTROL.B) == 0 and (CONTROL.Q + CONTROL.E) == 0 and SPEED ~= 0 then
+                    BV.Velocity = ((camera.CFrame.LookVector * (lCONTROL.F + lCONTROL.B)) + ((camera.CFrame * CFrame.new(lCONTROL.L + lCONTROL.R, (lCONTROL.F + lCONTROL.B + CONTROL.Q + CONTROL.E) * 0.2, 0).p) - camera.CFrame.p)) * SPEED
+                else
+                   BV.Velocity = Vector3.new(0, 0, 0)
+                end
+                BG.CFrame = camera.CFrame
+            until not FLYING
+            
+            CONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+    
+            lCONTROL = {F = 0, B = 0, L = 0, R = 0, Q = 0, E = 0}
+            SPEED = 0
+            
+            if BG then BG:Destroy() end
+            if BV then BV:Destroy() end
+
+            if humanoid and char.Parent then 
+                humanoid.PlatformStand = false 
+            end
+        end)
+    end
+
+    flyKeyDown = UIS.InputBegan:Connect(function(input, processed)
+        if processed then return end
+        
+        if input.KeyCode == Enum.KeyCode.W then
+            CONTROL.F = FlySpeed
+  
+        elseif input.KeyCode == Enum.KeyCode.S then
+            CONTROL.B = -FlySpeed
+        elseif input.KeyCode == Enum.KeyCode.A then
+            CONTROL.L = -FlySpeed
+        elseif input.KeyCode == Enum.KeyCode.D then
+            CONTROL.R = FlySpeed
+        elseif input.KeyCode == Enum.KeyCode.E and QEfly then
+          
+            CONTROL.Q = FlySpeed * 2
+        elseif input.KeyCode == Enum.KeyCode.Q and QEfly then
+            CONTROL.E = -FlySpeed * 2
+        end
+    end)
+
+    flyKeyUp = UIS.InputEnded:Connect(function(input, processed)
+        if processed then return end
+        
+        if input.KeyCode == Enum.KeyCode.W then
+            CONTROL.F = 0
+        elseif input.KeyCode == Enum.KeyCode.S then
+            CONTROL.B = 0
+        elseif input.KeyCode == Enum.KeyCode.A then
+            CONTROL.L = 0
+        elseif input.KeyCode == Enum.KeyCode.D then
+            CONTROL.R = 0
+        elseif input.KeyCode == Enum.KeyCode.E then
+         
+            CONTROL.Q = 0
+        elseif input.KeyCode == Enum.KeyCode.Q then
+            CONTROL.E = 0
+        end
+    end)
+    
+    FLY()
+end
+
+local function NOFLY()
+    FLYING = false
+    if flyKeyDown then 
+        flyKeyDown:Disconnect() 
+        flyKeyDown = nil
+    end
+    if flyKeyUp then 
+    
+        flyKeyUp:Disconnect() 
+        flyKeyUp = nil
+    end
+    
+    if player.Character and player.Character:FindFirstChildOfClass('Humanoid') then
+        player.Character:FindFirstChildOfClass('Humanoid').PlatformStand = false
+    end
+end
+
+-- Функции GUI
+local function AddIgnoreEntry(playerName)
+    local entry = Instance.new("TextButton")
+    entry.Name = "Entry"
+    entry.Parent = IgnoreList
+    entry.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    entry.BorderSizePixel = 0
+    entry.Size = UDim2.new(1, 0, 0, 25)
+    entry.Font = Enum.Font.Gotham
+   
+    entry.Text = "✗ " .. playerName
+    entry.TextColor3 = Color3.fromRGB(255, 150, 150)
+    entry.TextSize = 12
+    entry.TextXAlignment = Enum.TextXAlignment.Left
+    
+    -- Скругление для элемента игнора
+    local entryCorner = Instance.new("UICorner")
+    entryCorner.CornerRadius = UDim.new(0, 4)
+    entryCorner.Parent = entry
+    
+    entry.MouseButton1Click:Connect(function()
+        for i, name in ipairs(IgnoredPlayers) do
+            if name == playerName then
+     
+                table.remove(IgnoredPlayers, i)
+                break
+            end
+        end
+        entry:Destroy()
+        IgnoreList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+    end)
+    
+    IgnoreList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+end
+
+-- Функция для добавления игроков в список TP
+local function UpdatePlayerList()
+    -- Очищаем список
+    for _, child in ipairs(PlayerListFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    
+    -- Добавляем всех игроков кроме себя
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            local entry = Instance.new("TextButton")
+       
+            entry.Name = plr.Name
+            entry.Parent = PlayerListFrame
+            entry.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            entry.BorderSizePixel = 0
+            entry.Size = UDim2.new(1, 0, 0, 25)
+            entry.Font = Enum.Font.Gotham
+            entry.Text = plr.DisplayName .. " | @ " .. plr.Name
+            entry.TextColor3 = Color3.fromRGB(200, 200, 255)
+            entry.TextSize = 12
+            entry.TextXAlignment = Enum.TextXAlignment.Left
+            
+            -- Скругление для элемента списка игроков
+            local entryCorner = Instance.new("UICorner")
+          
+            entryCorner.CornerRadius = UDim.new(0, 4)
+            entryCorner.Parent = entry
+            
+            entry.MouseButton1Click:Connect(function()
+                selectedPlayerForTP = plr
+                TPToPlayerButton.Text = "TP TO: " .. plr.DisplayName
+                PlayerListFrame.Visible = false
+            end)
+        end
+    end
+    
+    PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, PlayerListLayout.AbsoluteContentSize.Y)
+end
+
+local function IsPlayerIgnored(playerName)
+    for _, ignoredName in ipairs(IgnoredPlayers) do
+        if string.lower(ignoredName) == string.lower(playerName) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Флинг игрока
+local function FlingPlayer(targetPlayer)
+    
+    if not targetPlayer or targetPlayer == player or not targetPlayer.Character then
+        return
+    end
+    
+    local targetRoot = getRoot(targetPlayer.Character)
+    if not targetRoot then return end
+    
+    -- Проверяем кулдаун
+    if lastFlingTime[targetPlayer] and tick() - lastFlingTime[targetPlayer] < 1 then
+        return
+    end
+    
+    lastFlingTime[targetPlayer] = tick()
+    
+    -- Применяем мощный флинг
+   
+    local flingPower = 50000
+    
+    -- Удаляем старые BodyVelocity и BodyAngularVelocity
+    for _, v in ipairs(targetRoot:GetChildren()) do
+        if v:IsA("BodyVelocity") or v:IsA("BodyAngularVelocity") then
+            v:Destroy()
+        end
+    end
+    
+    -- Создаем BodyVelocity для сильного толчка
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.Velocity = Vector3.new(
+        math.random(-flingPower, flingPower),
+   
+        math.random(flingPower, flingPower * 1.5),
+        math.random(-flingPower, flingPower)
+    )
+    bodyVelocity.MaxForce = Vector3.new(100000, 100000, 100000)
+    bodyVelocity.Parent = targetRoot
+    
+    -- Создаем BodyAngularVelocity для вращения
+    local bodyAngularVelocity = Instance.new("BodyAngularVelocity")
+    bodyAngularVelocity.AngularVelocity = Vector3.new(
+        math.random(-100000, 100000),
+        math.random(-100000, 100000),
+        math.random(-100000, 100000)
+    )
+    bodyAngularVelocity.MaxTorque = Vector3.new(100000, 100000, 100000)
+ 
+    bodyAngularVelocity.Parent = targetRoot
+    
+    -- Удаляем через 0.5 секунды
+    game:GetService("Debris"):AddItem(bodyVelocity, 0.5)
+    game:GetService("Debris"):AddItem(bodyAngularVelocity, 0.5)
+end
+
+-- Флинг всех игроков
+local function FlingAllPlayers()
+    if isFlinging then 
+        print("❌ Флинг уже выполняется!")
+        return 
+    end
+    
+    if not player.Character then 
+        print("❌ Нет персонажа!")
+        return 
+ 
+    end
+    
+    local rootPart = getRoot(player.Character)
+    if not rootPart then 
+        print("❌ Нет корневой части!")
+        return 
+    end
+    
+    isFlinging = true
+    FlingButton.Text = "ФЛИНГ... ВКЛ"
+    FlingButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+    
+    -- Запоминаем позицию ДО начала флинга
+    originalFlingPosition = rootPart.CFrame
+    local wasNoclip = Noclip
+   
+    local wasFlying = FLYING
+    
+    print("🚀 Начинаем флинг всех игроков...")
+    
+    spawn(function()
+        -- Включаем ноклип, если он выключен
+        if not Noclip then
+            ToggleNoclip()
+        end
+        
+        -- Включаем полет, если он выключен
+        if not FLYING then
+            ToggleFly()
+        end
+        
+        wait(0.5) -- Ждем активации полета и ноклипа
+        
+        local playersToFling = {}
+        for _, targetPlayer in ipairs(Players:GetPlayers()) do
+            if targetPlayer ~= player and not IsPlayerIgnored(targetPlayer.Name) and targetPlayer.Character then
+          
+                table.insert(playersToFling, targetPlayer)
+            end
+        end
+        
+        print("🎯 Целей для флинга: " .. #playersToFling)
+        
+        -- Флингаем каждого игрока
+        for i, targetPlayer in ipairs(playersToFling) do
+            if not targetPlayer.Character then continue end
+            
+            local targetRoot = getRoot(targetPlayer.Character)
+            if not targetRoot then continue end
+            
+            -- Телепортируемся к игроку (немного выше)
+            local targetPos = targetRoot.Position
+         
+            rootPart.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+            
+            -- Применяем флинг
+            FlingPlayer(targetPlayer)
+            print("💥 Флингнут: " .. targetPlayer.Name .. " (" .. i .. "/" .. #playersToFling .. ")")
+            
+            -- Ждем немного между флингами
+            wait(0.2)
+        end
+        
+        -- Возвращаемся на исходную позицию
+        if originalFlingPosition then
+            rootPart.CFrame = originalFlingPosition
+            print("📍 Возврат на исходную позицию")
+        end
+        
+  
+        -- Выключаем полет, если он был выключен изначально
+        if not wasFlying then
+            ToggleFly()
+        end
+        
+        -- Выключаем ноклип, если он был выключен изначально
+        if not wasNoclip then
+            ToggleNoclip()
+        end
+  
+        
+        isFlinging = false
+        FlingButton.Text = "ФЛИНГ ВСЕХ"
+        FlingButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+        
+        print("✅ Флинг всех игроков завершен!")
+    end)
+end
+
+-- Система Fly Fling
+local function ToggleFlyFling()
+    flyFlingEnabled = not flyFlingEnabled
+    
+    if flyFlingEnabled then
+        print("🔄 Включаем Fly Fling...")
+  
+        
+        -- Включаем полет и ноклип
+        if not FLYING then
+            ToggleFly()
+        end
+        if not Noclip then
+            ToggleNoclip()
+        end
+        
+        FlyFlingButton.Text = "FLY FLING: ВКЛ"
+        FlyFlingButton.BackgroundColor3 = Color3.fromRGB(200, 0, 200)
+        
+        -- Запускаем проверку столкновений
+        flyFlingConnection = RunService.Heartbeat:Connect(function()
+            if not flyFlingEnabled or not player.Character then return end
+            
+            local character = player.Character
+            
+            local myRoot = getRoot(character)
+            if not myRoot then return end
+            
+            -- Проверяем всех игроков рядом
+            for _, targetPlayer in ipairs(Players:GetPlayers()) do
+                if targetPlayer ~= player and not IsPlayerIgnored(targetPlayer.Name) and targetPlayer.Character then
+          
+                    local targetRoot = getRoot(targetPlayer.Character)
+                    if targetRoot then
+                        -- Проверяем расстояние (близкое)
+                        local distance = (myRoot.Position - targetRoot.Position).Magnitude
+         
+                        if distance < 10 then -- Уменьшил дистанцию для лучшей точности
+                            FlingPlayer(targetPlayer)
+                        end
+                    end
+   
+                end
+            end
+        end)
+        
+        print("✅ Fly Fling включен! Летайте и флингайте всех на своем пути!")
+    else
+        -- Выключаем
+        if flyFlingConnection then
+            flyFlingConnection:Disconnect()
+            flyFlingConnection = nil
+        end
+        
+        FlyFlingButton.Text = "FLY FLING: ВЫКЛ"
+        FlyFlingButton.BackgroundColor3 = Color3.fromRGB(150, 0, 150)
+     
+        print("❌ Fly Fling выключен")
+    end
+end
+
+-- Система Walk Fling
+local function ToggleWalkFling()
+    walkFlingEnabled = not walkFlingEnabled
+    
+    if walkFlingEnabled then
+        WalkFlingButton.Text = "WALK FLING: ВКЛ"
+        WalkFlingButton.BackgroundColor3 = Color3.fromRGB(255, 150, 0)
+        
+        -- Запускаем вращение и проверку столкновений
+        walkFlingConnection = RunService.Heartbeat:Connect(function()
+    
+            if not walkFlingEnabled or not player.Character then return end
+            
+            local character = player.Character
+            local myRoot = getRoot(character)
+            if not myRoot then return end
+            
+            -- Вращаем персонажа (более контролируемое вращение)
+            myRoot.RotVelocity = Vector3.new(0, 50, 0)
+            
+            -- Проверяем всех игроков рядом
+            for _, targetPlayer in ipairs(Players:GetPlayers()) do
+                if targetPlayer ~= player and not IsPlayerIgnored(targetPlayer.Name) and targetPlayer.Character then
+          
+                    local targetRoot = getRoot(targetPlayer.Character)
+                    if targetRoot then
+                        -- Проверяем расстояние
+                        local distance = (myRoot.Position - targetRoot.Position).Magnitude
+          
+                        if distance < 8 then
+                            FlingPlayer(targetPlayer)
+                        end
+                    end
+          
+                end
+            end
+        end)
+        
+        print("Walk Fling включен! Идите и флингайте всех на своем пути!")
+    else
+        -- Выключаем
+        if walkFlingConnection then
+            walkFlingConnection:Disconnect()
+            walkFlingConnection = nil
+        end
+        
+        -- Останавливаем вращение
+        if player.Character then
+         
+            local myRoot = getRoot(player.Character)
+            if myRoot then
+                myRoot.RotVelocity = Vector3.new(0, 0, 0)
+            end
+        end
+        
+        WalkFlingButton.Text = "WALK FLING: ВЫКЛ"
+        WalkFlingButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+        
+        print("Walk Fling выключен")
+    end
+end
+
+-- Функция полета
+local function ToggleFly()
+    if FLYING then
+        NOFLY()
+        FlyButton.Text = "ПОЛЕТ: ВЫКЛ"
+        FlyButton.BackgroundColor3 = Color3.fromRGB(0, 150, 50)
+        print("❌ Полет выключен")
+    else
+        sFLY()
+        if FLYING then  -- Проверяем, что полет успешно включился
+      
+            FlyButton.Text = "ПОЛЕТ: ВКЛ"
+            FlyButton.BackgroundColor3 = Color3.fromRGB(50, 200, 100)
+            print("✅ Полет включен!")
+        else
+            print("❌ Не удалось включить полет!")
+        end
+    end
+end
+
+-- Функция ноуклипа
+local NoclipConnection
+local function ToggleNoclip()
+    Noclip = not Noclip
+    NoclipButton.Text = Noclip and "НОУКЛИП: ВКЛ" or "НОУКЛИП: ВЫКЛ"
+ 
+    NoclipButton.BackgroundColor3 = Noclip and Color3.fromRGB(200, 200, 50) or Color3.fromRGB(150, 150, 0)
+    
+    if Noclip then
+        NoclipConnection = RunService.Stepped:Connect(function()
+            if not Noclip then return end
+            if player.Character then
+                for _, part in ipairs(player.Character:GetDescendants()) do
+               
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+        print("✅ Ноклип включен")
+ 
+    else
+        if NoclipConnection then
+            NoclipConnection:Disconnect()
+            NoclipConnection = nil
+        end
+        if player.Character then
+            for _, part in ipairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+        
+                    part.CanCollide = true
+                end
+            end
+        end
+        print("❌ Ноклип выключен")
+    end
+end
+
+-- Функция сворачивания/разворачивания GUI
+local function ToggleMinimize()
+    isMinimized = not isMinimized
+    
+    if isMinimized then
+        -- Создаем список элементов для скрытия (все кроме заголовка)
+        local elementsToHide = {
+            InputFrame, IgnoreLabel, IgnoreList, FlingButton, FlyButton, 
+            NoclipButton, FlyFlingButton, WalkFlingButton, TPForwardButton, 
+            TPToPlayerButton, ResetButton, ServerHopButton, SpeedFrame, 
+            WalkSpeedFrame, JumpPowerFrame, PlayerListFrame
+        }
+        
+      
+        -- Скрываем все элементы
+        for _, element in ipairs(elementsToHide) do
+            if element then
+                element.Visible = false
+            end
+        end
+        
+        -- Меняем размер и текст кнопки
+        MainFrame.Size = UDim2.new(0, 350, 0, 40)
+        MinimizeButton.Text = "+"
+        
+        print("📱 GUI свернут")
+    else
+        -- Создаем список элементов для показа
+        local elementsToShow = {
+            InputFrame, IgnoreLabel, IgnoreList, FlingButton, FlyButton, 
+            NoclipButton, FlyFlingButton, WalkFlingButton, TPForwardButton, 
+       
+            TPToPlayerButton, ResetButton, ServerHopButton, SpeedFrame, 
+            WalkSpeedFrame, JumpPowerFrame
+        }
+        
+        -- Показываем все основные элементы (PlayerListFrame остается скрытым)
+        for _, element in ipairs(elementsToShow) do
+            if element then
+                element.Visible = true
+  
+            end
+        end
+        
+        -- Восстанавливаем размер и текст кнопки
+        MainFrame.Size = UDim2.new(0, 350, 0, 750)
+        MinimizeButton.Text = "-"
+        
+        print("📱 GUI развернут")
+    end
+end
+
+-- Обработчики событий
+AddButton.MouseButton1Click:Connect(function()
+    local targetName = InputBox.Text
+    if targetName ~= "" then
+        local alreadyExists = false
+        for _, name in ipairs(IgnoredPlayers) do
+            if string.lower(name) == string.lower(targetName) then
+                alreadyExists = true
+                break
+            end
+        end
+     
+        
+        if not alreadyExists then
+            table.insert(IgnoredPlayers, targetName)
+            AddIgnoreEntry(targetName)
+            InputBox.Text = ""
+            print("✅ Добавлен в игнор: " .. targetName)
+        else
+            print("❌ Уже в игнор-листе: " .. targetName)
+   
+        end
+    end
+end)
+
+-- Обработчики кнопок
+FlingButton.MouseButton1Click:Connect(FlingAllPlayers)
+FlyButton.MouseButton1Click:Connect(ToggleFly)
+NoclipButton.MouseButton1Click:Connect(ToggleNoclip)
+FlyFlingButton.MouseButton1Click:Connect(ToggleFlyFling)
+WalkFlingButton.MouseButton1Click:Connect(ToggleWalkFling)
+TPForwardButton.MouseButton1Click:Connect(TPForward)
+TPToPlayerButton.MouseButton1Click:Connect(TPToPlayer)
+ResetButton.MouseButton1Click:Connect(ResetCharacter)
+ServerHopButton.MouseButton1Click:Connect(ServerHop)
+MinimizeButton.MouseButton1Click:Connect(ToggleMinimize)
+
+-- Кнопка для показа списка игроков
+TPToPlayerButton.MouseButton2Click:Connect(function() -- Правая кнопка мыши
+    PlayerListFrame.Visible = not PlayerListFrame.Visible
+    if PlayerListFrame.Visible then
+        UpdatePlayerList()
+        print("📋 Список игроков открыт")
+    else
+        print("📋 Список игроков закрыт")
+    end
+end)
+
+-- Кнопки скорости полета
+SpeedFrame.DownButton.MouseButton1Click:Connect(function()
+    FlySpeed = math.max(1, FlySpeed - 1)
+    SpeedFrame.Label.Text = "Fly Speed: " .. tostring(FlySpeed)
+    print("📉 Скорость полета: " .. FlySpeed)
+end)
+
+SpeedFrame.UpButton.MouseButton1Click:Connect(function()
+    FlySpeed = math.min(10, FlySpeed + 1)
+    SpeedFrame.Label.Text = "Fly Speed: " .. tostring(FlySpeed)
+    print("📈 Скорость полета: " .. FlySpeed)
+end)
+
+-- Кнопки WalkSpeed
+WalkSpeedFrame.DownButton.MouseButton1Click:Connect(function()
+    currentWalkSpeed = math.max(0, currentWalkSpeed - 5)
+    WalkSpeedFrame.Label.Text = "WalkSpeed: " .. tostring(currentWalkSpeed)
+    updateWalkSpeed() -- Вызываем для установки и активации контроля
+    print("📉 WalkSpeed: " .. currentWalkSpeed)
+end)
+
+WalkSpeedFrame.UpButton.MouseButton1Click:Connect(function()
+    currentWalkSpeed = math.min(200, currentWalkSpeed + 5)
+    WalkSpeedFrame.Label.Text = "WalkSpeed: " .. tostring(currentWalkSpeed)
+    updateWalkSpeed() -- Вызываем для установки и активации контроля
+    print("📈 WalkSpeed: " .. currentWalkSpeed)
+end)
+
+-- Кнопки JumpPower
+JumpPowerFrame.DownButton.MouseButton1Click:Connect(function()
+    currentJumpPower = math.max(0, currentJumpPower - 5)
+    JumpPowerFrame.Label.Text = "JumpPower: " .. tostring(currentJumpPower)
+    updateJumpPower()
+    print("📉 JumpPower: " .. currentJumpPower)
+end)
+
+JumpPowerFrame.UpButton.MouseButton1Click:Connect(function()
+    currentJumpPower = math.min(200, currentJumpPower + 5)
+    JumpPowerFrame.Label.Text = "JumpPower: " .. tostring(currentJumpPower)
+    updateJumpPower()
+    print("📈 JumpPower: " .. currentJumpPower)
+end)
+
+-- Изначальное применение скорости при запуске
+spawn(function()
+    wait(1)
+    if player.Character then
+        local humanoid = getHumanoid(player.Character)
+        if humanoid then
+            -- Читаем WalkSpeed от сервера как базовое значение
+            currentWalkSpeed = humanoid.WalkSpeed
+            originalWalkSpeed = currentWalkSpeed
+            WalkSpeedFrame.Label.Text = "WalkSpeed: " .. tostring(currentWalkSpeed)
+            
+            currentJumpPower = humanoid.JumpPower
+            originalJumpPower = currentJumpPower
+            JumpPowerFrame.Label.Text = "JumpPower: " .. tostring(currentJumpPower)
+      
+            
+            -- Активируем контроль WalkSpeed
+            updateWalkSpeed() 
+            
+            print("✅ Настройки скорости загружены")
+        end
+    end
+end)
+
+-- Автоматическое применение при респавне (Смерть)
+player.CharacterAdded:Connect(function(character)
+    wait(0.5) -- Небольшая задержка, чтобы Humanoid точно загрузился
+    
+    -- Получаем Humanoid
+    local humanoid = getHumanoid(character)
+    if humanoid then
+        -- При респавне **берем значение скорости от сервера**
+        -- Это значение может быть 16 или любым другим, установленным игрой по умолчанию.
+        currentWalkSpeed = humanoid.WalkSpeed
+        originalWalkSpeed = currentWalkSpeed
+        WalkSpeedFrame.Label.Text = "WalkSpeed: " .. tostring(currentWalkSpeed)
+        
+        currentJumpPower = humanoid.JumpPower
+        originalJumpPower = currentJumpPower
+        JumpPowerFrame.Label.Text = "JumpPower: " .. tostring(currentJumpPower)
+    end
+    
+    -- Перезапускаем системы если они были включены
+    if Noclip then
+        ToggleNoclip()
+        wait(0.1)
+        ToggleNoclip()
+    end
+    
+    if FLYING then
+        ToggleFly()
+        wait(0.1)
+        ToggleFly()
+    end
+    
+    if flyFlingEnabled then
+        ToggleFlyFling()
+        wait(0.1)
+        ToggleFlyFling()
+    end
+    
+    if walkFlingEnabled then
+        ToggleWalkFling()
+        wait(0.1)
+        ToggleWalkFling()
+    end
+    
+    -- Применяем WalkSpeed (и активируем новый контроллер)
+    updateWalkSpeed()
+    updateJumpPower()
+    
+    print("✅ Персонаж зареспавнен, настройки применены")
+end)
+
+-- Очистка при выходе
+Players.PlayerRemoving:Connect(function(leftPlayer)
+    lastFlingTime[leftPlayer] = nil
+    if selectedPlayerForTP == leftPlayer then
+        selectedPlayerForTP = nil
+        TPToPlayerButton.Text = "TP TO PLAYER"
+        print("❌ Игрок вышел: " .. leftPlayer.Name)
+    end
+end)
+
+-- Обновление списка игроков при подключении/отключении
+Players.PlayerAdded:Connect(UpdatePlayerList)
+Players.PlayerRemoving:Connect(UpdatePlayerList)
+
+print("")
+print("🎉 Xeno Script загружен!")
+print("⚡️ WalkSpeed теперь постоянно контролируется и не сбрасывается!")
